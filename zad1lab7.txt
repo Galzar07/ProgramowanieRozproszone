@@ -1,0 +1,158 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <time.h>
+#include "mpi.h"
+#define ENERGIA 500
+#define STACJA_KOLEJOWA 1
+#define WYJAZD 2
+#define MIASTO 3
+#define KONIEC_PRZERWY 4
+#define STACJA_BENZYNOWA 5
+#define WYPADEK 6
+#define TANKUJ 1000
+int paliwo = 1000, energia = 1000;
+int ZATRZYMUJE=1, NIE_ZATRZYMUJE=0;
+int liczba_procesow;
+int nr_procesu;
+int ilosc_pociagow;
+int ilosc_miejsc=100;
+int ilosc_zajetych_miejsc=0;
+int tag=1;
+int wyslij[2];
+int odbierz[2];
+MPI_Status mpi_status;
+
+void Wyslij(int nr_pociagu, int stan)
+{
+	wyslij[0]=nr_pociagu;
+	wyslij[1]=stan;
+	MPI_Send(&wyslij, 2, MPI_INT, 0, tag, MPI_COMM_WORLD);
+	sleep(1);
+}
+
+void Postoj(int liczba_procesow){
+	int nr_pociagu,status;
+	ilosc_pociagow = liczba_procesow - 1;
+	printf("Jest %d miejsc na stacji\n", ilosc_miejsc);
+	sleep(2);
+	while(ilosc_miejsc<=ilosc_pociagow){
+		MPI_Recv(&odbierz,2,MPI_INT,MPI_ANY_SOURCE,tag,MPI_COMM_WORLD, &mpi_status);
+		nr_pociagu=odbierz[0];
+		status=odbierz[1];
+		if(status==1){
+			printf("Pociag %d stoi na stacji\n", nr_pociagu);
+		}
+		if(status==2){
+			printf("Pociag %d wyjezdza na miasto z miejsca nr %d\n", nr_pociagu, ilosc_zajetych_miejsc);
+			ilosc_zajetych_miejsc--;
+		}
+		if(status==3){
+			printf("Pociag %d zbliza sie do miasta\n", nr_pociagu);
+		}
+		if(status==4){
+			if(ilosc_zajetych_miejsc<ilosc_miejsc){
+				ilosc_zajetych_miejsc++;
+				MPI_Send(&ZATRZYMUJE, 1, MPI_INT, nr_pociagu, tag, MPI_COMM_WORLD);
+			}
+			else{
+				MPI_Send(&NIE_ZATRZYMUJE, 1, MPI_INT, nr_pociagu, tag, MPI_COMM_WORLD);
+			}
+		}
+		if(status == 5){
+			printf("Pociag %d tankuje na stacji\n", nr_pociagu);
+		}
+		if(status==6){
+			ilosc_pociagow--;
+			printf("Ilosc Pociagow %d\n", ilosc_pociagow);
+		}
+	}
+	printf("Program zakonczyl dzialanie:)\n");
+}
+
+void Pociag(){
+	int stan,suma,i;
+	stan=MIASTO;
+	while(1){
+		if(stan==1){
+			if(rand()%2==1){
+				stan=WYJAZD;
+				energia=1000;
+				printf("Jestem gotowy do startu, pociag %d\n",nr_procesu);
+				Wyslij(nr_procesu,stan);
+			}
+			else{
+				Wyslij(nr_procesu,stan);
+			}
+		}
+		else if(stan==2){
+			printf("Wyjechalem, pociag %d\n",nr_procesu);
+			stan=MIASTO;
+			Wyslij(nr_procesu,stan);
+		}
+		else if(stan==3){
+			paliwo-=rand()%500; 
+			energia-=rand()%500;
+			if(energia <= 500){
+                stan = KONIEC_PRZERWY;
+                printf("pociag %d, jestem zmeczony\n",nr_procesu);
+                Wyslij(nr_procesu, stan);
+            }
+			else if(paliwo<=ENERGIA){
+				stan=STACJA_BENZYNOWA;
+				printf("pociag %d, powinienem zatankowac\n",nr_procesu);
+				Wyslij(nr_procesu, stan);
+			}
+			else{
+				for(i=0; rand()%10000;i++);
+			}
+		}
+		else if(stan==4){
+			int temp;
+			MPI_Recv(&temp, 1, MPI_INT, 0, tag, MPI_COMM_WORLD, &mpi_status);
+			if(temp==ZATRZYMUJE){
+				stan=STACJA_KOLEJOWA;
+				printf("Zatrzymalem sie na stacji, pociag %d\n", nr_procesu);
+			}
+			else
+				{
+				energia-=rand()%500;
+				paliwo-=rand()%500;
+				if(energia <= 0){
+					stan = WYPADEK;
+					printf("Mialem wypadek, pociag %d\n", nr_procesu);
+					Wyslij(nr_procesu,stan);
+				}
+				else if(paliwo>0){
+					stan=STACJA_BENZYNOWA;
+					Wyslij(nr_procesu,stan);
+				}
+				else{
+					stan=WYPADEK;
+					printf("Mialem wypadek\n");
+					Wyslij(nr_procesu,stan);
+					return;
+				}
+			}
+		}
+		else if(stan == 5){
+			printf("pociag %d, jestem na stacji\n", nr_procesu);
+			paliwo = TANKUJ;
+			stan = MIASTO;
+			Wyslij(nr_procesu,stan);
+		}
+	}
+}
+int main(int argc, char *argv[])
+{
+	MPI_Init(&argc, &argv);
+	MPI_Comm_rank(MPI_COMM_WORLD,&nr_procesu);
+	MPI_Comm_size(MPI_COMM_WORLD,&liczba_procesow);
+	srand(time(NULL));
+	if(nr_procesu == 0)
+		Postoj(liczba_procesow);
+	else 
+		Pociag();
+	MPI_Finalize();
+	return 0;
+}
